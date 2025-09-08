@@ -1,0 +1,380 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+ZMQ客户端，用于接收和发送ROS消息
+运行在Windows系统(IP: 10.10.19.15)
+从10.10.16.233接收/server_time_now和/move_base_node/cross_v2_response话题
+向10.10.16.233发送/test话题，内容为"test"，频率1Hz
+使用Protobuf优化传输性能
+"""
+
+import zmq
+import time
+import threading
+import struct
+import json
+import yaml
+import os
+from datetime import datetime
+from pathlib import Path
+from logger import Logger, LogLevel
+
+try:
+    import google.protobuf.message as pb_message
+    from google.protobuf.json_format import MessageToJson, Parse
+    PROTOBUF_AVAILABLE = True
+except ImportError:
+    # 在logger初始化前使用临时输出
+    print("警告: Protobuf未安装，将使用JSON格式传输")
+    PROTOBUF_AVAILABLE = False
+
+class ZMQClient:
+    def __init__(self, config_path="zmq_config.yaml"):
+        # 先初始化日志器
+        self.logger = Logger(
+            name="ZMQClient",
+            max_message_length=200,
+            show_timestamp=True,
+            min_level=LogLevel.INFO
+        )
+        
+        # 加载配置文件
+        self.config = self.load_config(config_path)
+        
+        self.context = zmq.Context()
+        
+        # 从配置文件读取网络参数
+        self.ros1_server_ip = self.config['network']['ros1_server']['ip']
+        self.local_ip = self.config['network']['local']['ip']
+        self.receive_port = self.config['network']['ros1_server']['receive_port']
+        self.send_port = self.config['network']['local']['send_port']
+        
+        # 创建订阅者套接字用于接收消息
+        self.sub_socket = self.context.socket(zmq.SUB)
+        
+        # 创建发布者套接字用于发送测试消息
+        self.pub_test = self.context.socket(zmq.PUB)
+        
+        # 连接到ROS1服务器
+        self.sub_socket.connect(f"tcp://{self.ros1_server_ip}:{self.receive_port}")
+        # 绑定本地端口
+        self.pub_test.bind(f"tcp://*:{self.send_port}")
+        
+        # 在多路复用模式下订阅所有消息，然后通过话题名称过滤
+        # 订阅空字符串表示接收所有消息
+        self.sub_socket.setsockopt(zmq.SUBSCRIBE, b'')
+        self.logger.info(f"已订阅所有消息，将通过话题名称过滤: {', '.join(self.config['topics']['subscribe'])}")
+        
+        # 运行标志
+        self.running = True
+        
+        # Protobuf配置
+        self.use_protobuf = PROTOBUF_AVAILABLE and self.config['transport']['prefer_protobuf']
+        
+        # 从配置读取其他参数
+        self.receive_timeout = self.config['transport']['zmq']['receive_timeout']
+        self.connection_wait = self.config['transport']['zmq']['connection_wait']
+        self.retry_interval = self.config['transport']['zmq']['retry_interval']
+        self.send_interval = self.config['performance']['send_interval']
+        
+        # 话题配置
+        self.test_topic = self.config['topics']['publish']['test_topic']['name']
+        self.test_content = self.config['topics']['publish']['test_topic']['content']
+        self.test_frequency = self.config['topics']['publish']['test_topic']['frequency']
+        
+        if self.config['logging']['show_connection_details']:
+            self.logger.info(f"ZMQ客户端已初始化 (Windows IP: {self.local_ip})")
+            self.logger.info(f"从以下地址接收消息: {self.ros1_server_ip}:{self.receive_port}")
+            self.logger.info(f"监听话题: {', '.join(self.config['topics']['subscribe'])}")
+            self.logger.info(f"发布{self.test_topic}话题到端口{self.send_port}")
+            if self.config['logging']['show_transport_format']:
+                self.logger.info(f"传输格式: {'Protobuf' if self.use_protobuf else 'JSON'}")
+    
+    def load_config(self, config_path):
+        """加载配置文件"""
+        try:
+            # 获取脚本所在目录
+            script_dir = Path(__file__).parent
+            config_file = script_dir / config_path
+            
+            if not config_file.exists():
+                raise FileNotFoundError(f"配置文件未找到: {config_file}")
+            
+            with open(config_file, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f)
+            
+            self.logger.info(f"配置文件加载成功: {config_file}")
+            return config
+        except Exception as e:
+            self.logger.error(f"加载配置文件时出错: {e}")
+            self.logger.info("使用默认配置...")
+            return self.get_default_config()
+    
+    def get_default_config(self):
+        """获取默认配置"""
+        return {
+            'network': {
+                'local': {'ip': '10.10.19.15', 'send_port': 5556},
+                'ros1_server': {'ip': '10.10.16.233', 'receive_port': 5555}
+            },
+            'topics': {
+                'subscribe': ['/server_time_now', '/move_base_node/cross_v2_response'],
+                'publish': {
+                    'test_topic': {'name': '/test', 'content': 'test', 'frequency': 1.0}
+                }
+            },
+            'transport': {
+                'prefer_protobuf': True,
+                'zmq': {'receive_timeout': 1000, 'connection_wait': 2, 'retry_interval': 0.1}
+            },
+            'logging': {
+                'show_timestamp': True,
+                'timestamp_format': '%Y-%m-%d %H:%M:%S.%f',
+                'show_transport_format': True,
+                'show_connection_details': True
+            },
+            'performance': {'main_loop_sleep': 1.0, 'send_interval': 1.0}
+        }
+    
+    def parse_message(self, raw_data):
+        """解析ZMQ消息格式: [话题名长度][话题名][数据长度][消息数据]"""
+        try:
+            if len(raw_data) < 8:  # 至少需要话题名长度(4) + 数据长度(4)
+                return None, None
+            
+            offset = 0
+            # 提取话题名长度（前4个字节）
+            topic_length = struct.unpack('I', raw_data[offset:offset+4])[0]
+            offset += 4
+            
+            # 提取话题名
+            if len(raw_data) < offset + topic_length:
+                return None, None
+            topic_name = raw_data[offset:offset+topic_length].decode('utf-8')
+            offset += topic_length
+            
+            # 提取数据长度
+            if len(raw_data) < offset + 4:
+                return None, None
+            data_length = struct.unpack('I', raw_data[offset:offset+4])[0]
+            offset += 4
+            
+            # 提取消息数据
+            if len(raw_data) >= offset + data_length:
+                message_data = raw_data[offset:offset+data_length]
+                if self.use_protobuf:
+                    # 尝试解析为Protobuf格式
+                    try:
+                        return topic_name, message_data.decode('utf-8')
+                    except:
+                        return topic_name, str(message_data)
+                else:
+                    return topic_name, message_data.decode('utf-8')
+            
+            return None, None
+        except Exception as e:
+            self.logger.error(f"解析消息时出错: {e}")
+            return None, None
+    
+    def create_message(self, topic_name, content):
+        """创建ZMQ多帧消息格式: [话题名帧][数据长度帧][消息数据帧]"""
+        try:
+            # 编码话题名作为第一帧
+            topic_frame = topic_name.encode('utf-8')
+            
+            # 创建符合ROS std_msgs/String格式的序列化数据
+            # std_msgs/String消息格式: [字符串长度(4字节)] + [字符串数据]
+            content_bytes = content.encode('utf-8')
+            content_length = len(content_bytes)
+            
+            # 按照ROS序列化格式构造消息数据
+            # 格式: [字符串长度(4字节小端序)] + [字符串数据]
+            message_data = struct.pack('<I', content_length) + content_bytes
+            self.logger.debug(f"创建消息: 话题={topic_name}, 内容={content}, 消息类型=std_msgs/String, 序列化后长度={len(message_data)}字节")
+            
+            # 数据长度作为第二帧（4字节整数）
+            data_length = len(message_data)
+            data_length_frame = struct.pack('I', data_length)
+            
+            # 返回多帧消息列表: [话题名帧, 数据长度帧, 消息数据帧]
+            return [topic_frame, data_length_frame, message_data]
+        except Exception as e:
+            self.logger.error(f"创建消息时出错: {e}")
+            return None
+    
+    def receive_messages(self):
+        """统一接收所有订阅的消息"""
+        while self.running:
+            try:
+                # 使用配置的超时时间
+                if self.sub_socket.poll(self.receive_timeout):
+                    # 接收多帧消息：[话题名][数据长度][消息数据]
+                    try:
+                        # 接收所有帧
+                        frames = self.sub_socket.recv_multipart(zmq.NOBLOCK)
+                        if len(frames) >= 3:
+                            topic_name = frames[0].decode('utf-8')
+                            # frames[1]应该是4字节的数据长度
+                            if len(frames[1]) == 4:
+                                data_length = struct.unpack('I', frames[1])[0]
+                            else:
+                                # 如果不是4字节，可能是字符串格式的长度
+                                try:
+                                    data_length = int(frames[1].decode('utf-8'))
+                                except:
+                                    data_length = len(frames[2])
+                            
+                            message_data = frames[2]
+                            
+                            # 验证数据长度
+                            if len(message_data) != data_length:
+                                self.logger.warning(f"数据长度不匹配，期望{data_length}，实际{len(message_data)}")
+                            
+                            # 解析消息内容
+                            if self.use_protobuf:
+                                try:
+                                    message = message_data.decode('utf-8')
+                                except:
+                                    message = str(message_data)
+                            else:
+                                message = message_data.decode('utf-8')
+                            
+                            # 检查是否是订阅的话题
+                            if topic_name in self.config['topics']['subscribe']:
+                                if self.config['logging']['show_timestamp']:
+                                    timestamp_format = self.config['logging']['timestamp_format']
+                                    timestamp = datetime.now().strftime(timestamp_format)[:-3]
+                                    self.logger.info(f"[{timestamp}] 接收{topic_name}: {message} [消息类型: {type(message).__name__}, 数据长度: {len(message_data)}字节]")
+                                else:
+                                    self.logger.info(f"接收{topic_name}: {message} [消息类型: {type(message).__name__}, 数据长度: {len(message_data)}字节]")
+                            else:
+                                # 显示非订阅话题（用于调试）
+                                pass
+                                # self.logger.debug(f"收到非订阅话题 {topic_name}: {message[:50]}{'...' if len(message) > 50 else ''} [消息类型: {type(message).__name__}, 数据长度: {len(message_data)}字节]")
+                        else:
+                            self.logger.warning(f"接收到不完整的消息帧: {len(frames)} 帧")
+                        for i, frame in enumerate(frames):
+                            self.logger.debug(f"  帧{i}: {frame[:50]}{'...' if len(frame) > 50 else ''}")
+                    except Exception as parse_error:
+                        self.logger.error(f"解析多帧消息时出错: {parse_error}")
+                        # 尝试单帧解析作为备用
+                        raw_data = self.sub_socket.recv(zmq.NOBLOCK)
+                        topic_name, message = self.parse_message(raw_data)
+                        if topic_name and message:
+                            if self.config['logging']['show_timestamp']:
+                                timestamp_format = self.config['logging']['timestamp_format']
+                                timestamp = datetime.now().strftime(timestamp_format)[:-3]
+                                self.logger.info(f"[{timestamp}] 接收{topic_name}: {message} (单帧格式) [消息类型: {type(message).__name__}]")
+                            else:
+                                self.logger.info(f"接收{topic_name}: {message} (单帧格式) [消息类型: {type(message).__name__}]")
+            except zmq.Again:
+                continue
+            except Exception as e:
+                self.logger.error(f"接收消息时出错: {e}")
+                time.sleep(self.retry_interval)
+    
+    def send_test_messages(self):
+        """按配置频率发送测试消息"""
+        send_interval = 1.0 / self.test_frequency  # 根据频率计算间隔
+        
+        while self.running:
+            try:
+                # 使用配置的测试消息内容
+                message_frames = self.create_message(self.test_topic, self.test_content)
+                
+                if message_frames:
+                    # 发送多帧消息
+                    self.pub_test.send_multipart(message_frames)
+                    
+                    if self.config['logging']['show_timestamp']:
+                        timestamp_format = self.config['logging']['timestamp_format']
+                        timestamp = datetime.now().strftime(timestamp_format)[:-3]
+                        if self.config['logging']['show_transport_format']:
+                            self.logger.info(f"[{timestamp}] 发送{self.test_topic}: {self.test_content} (格式: {'Protobuf' if self.use_protobuf else 'JSON'}, 多帧) [消息类型: std_msgs/String, 数据长度: {len(message_frames[2])}字节]")
+                        else:
+                            self.logger.info(f"[{timestamp}] 发送{self.test_topic}: {self.test_content} (多帧) [消息类型: std_msgs/String, 数据长度: {len(message_frames[2])}字节]")
+                    else:
+                        self.logger.info(f"发送{self.test_topic}: {self.test_content} (多帧) [消息类型: std_msgs/String, 数据长度: {len(message_frames[2])}字节]")
+                
+                time.sleep(send_interval)
+            except Exception as e:
+                self.logger.error(f"发送测试消息时出错: {e}")
+                time.sleep(send_interval)
+    
+    def start(self):
+        """启动所有线程"""
+        self.logger.info("正在启动ZMQ客户端...")
+        
+        # 创建并启动线程
+        thread_receiver = threading.Thread(target=self.receive_messages, daemon=True)
+        thread_test_sender = threading.Thread(target=self.send_test_messages, daemon=True)
+        
+        thread_receiver.start()
+        thread_test_sender.start()
+        
+        self.logger.info("所有线程已启动。按Ctrl+C停止。")
+        self.logger.info("等待连接建立...")
+        time.sleep(self.connection_wait)  # 使用配置的等待时间
+        
+        try:
+            while True:
+                time.sleep(self.config['performance']['main_loop_sleep'])
+        except KeyboardInterrupt:
+            self.logger.info("\n正在停止ZMQ客户端...")
+            self.stop()
+    
+    def stop(self):
+        """停止客户端"""
+        self.running = False
+        
+        # 关闭套接字
+        self.sub_socket.close()
+        self.pub_test.close()
+        
+        # 终止上下文
+        self.context.term()
+        
+        self.logger.info("ZMQ客户端已停止。")
+
+def main():
+    """主函数"""
+    import argparse
+    
+    # 解析命令行参数
+    parser = argparse.ArgumentParser(description='ZMQ客户端用于ROS消息通信')
+    parser.add_argument('--config', '-c', default='zmq_config.yaml', 
+                       help='配置文件路径 (默认: zmq_config.yaml)')
+    args = parser.parse_args()
+    
+    # 创建临时日志器用于main函数输出
+    from logger import create_logger, LogLevel
+    main_logger = create_logger("Main", min_level=LogLevel.INFO)
+    
+    main_logger.info("=== ZMQ客户端用于ROS消息通信 (配置化版本) ===")
+    main_logger.info(f"配置文件: {args.config}")
+    main_logger.info(f"Protobuf支持: {'可用' if PROTOBUF_AVAILABLE else '不可用'}")
+    main_logger.info("=" * 60)
+    
+    try:
+        client = ZMQClient(config_path=args.config)
+        
+        # 显示配置信息
+        config = client.config
+        main_logger.info("\n当前配置:")
+        main_logger.info(f"  本地IP: {config['network']['local']['ip']}")
+        main_logger.info(f"  ROS1服务器: {config['network']['ros1_server']['ip']}:{config['network']['ros1_server']['receive_port']}")
+        main_logger.info(f"  发送端口: {config['network']['local']['send_port']}")
+        main_logger.info(f"  订阅话题: {', '.join(config['topics']['subscribe'])}")
+        main_logger.info(f"  发布话题: {config['topics']['publish']['test_topic']['name']} ({config['topics']['publish']['test_topic']['frequency']}Hz)")
+        main_logger.info(f"  传输格式: {'Protobuf' if client.use_protobuf else 'JSON'}")
+        main_logger.info("="*60)
+        
+        client.start()
+    except Exception as e:
+        main_logger.error(f"启动客户端时出错: {e}")
+        return 1
+    
+    return 0
+
+if __name__ == "__main__":
+    exit(main())

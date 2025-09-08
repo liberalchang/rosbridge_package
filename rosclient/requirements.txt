@@ -1,0 +1,21 @@
+# # ZMQ客户端依赖包
+# 支持配置文件驱动的ZMQ客户端，用于与ROS1服务器通信
+
+# ZeroMQ Python绑定
+pyzmq>=24.0.0
+
+# YAML配置文件解析
+PyYAML>=6.0
+
+# Protobuf用于优化传输性能
+protobuf>=4.21.0
+
+# 内置模块（无需安装）:
+# - json: JSON数据处理
+# - datetime: 时间戳处理
+# - threading: 多线程支持
+# - struct: 二进制数据打包/解包
+# - time: 时间控制
+# - pathlib: 路径处理
+# - argparse: 命令行参数解析
+# - os: 操作系统接口

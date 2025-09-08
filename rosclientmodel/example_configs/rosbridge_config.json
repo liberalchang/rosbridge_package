@@ -1,0 +1,32 @@
+{
+  "ROSBridge": {
+    "host": "localhost",
+    "port": 9091,
+    "protocol": "ws",
+    "connection_timeout": 10,
+    "retry_interval": 0.1,
+    "max_retries": 3,
+    "ping_interval": 30,
+    "ping_timeout": 10,
+    "close_timeout": 10,
+    "max_size": 1048576,
+    "auto_reconnect": true,
+    "reconnect_interval": 5,
+    "max_reconnect_attempts": -1,
+    "verbose": true,
+    "show_connection_status": true,
+    "show_message_content": true,
+    "max_message_length": 200,
+    "main_loop_sleep": 0.1,
+    "publish_sleep": 1.0,
+    "message_processing_sleep": 0.01,
+    "message_format": "json",
+    "encoding": "utf-8",
+    "compression_enabled": false,
+    "compression_level": 6
+  },
+  "Network": {
+    "connectivity_check_enabled": true,
+    "connectivity_timeout": 5
+  }
+}

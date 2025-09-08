@@ -1,0 +1,42 @@
+{
+  "ZMQ": {
+    "pub_port": 5555,
+    "sub_port": 5556,
+    "req_port": 5557,
+    "rep_port": 5558,
+    "host": "localhost",
+    "connection_timeout": 10,
+    "retry_interval": 0.1,
+    "max_retries": 3,
+    "socket_timeout": 5000,
+    "linger_time": 1000,
+    "high_water_mark": 1000,
+    "auto_reconnect": true,
+    "reconnect_interval": 5,
+    "max_reconnect_attempts": -1,
+    "verbose": true,
+    "show_connection_status": true,
+    "show_message_content": true,
+    "max_message_length": 200,
+    "main_loop_sleep": 0.1,
+    "publish_sleep": 1.0,
+    "message_processing_sleep": 0.01,
+    "message_format": "json",
+    "encoding": "utf-8",
+    "compression_enabled": false,
+    "compression_level": 6,
+    "heartbeat_enabled": true,
+    "heartbeat_interval": 30,
+    "heartbeat_timeout": 10,
+    "queue_size": 100,
+    "thread_pool_size": 4,
+    "security_enabled": false,
+    "security_mechanism": "PLAIN",
+    "username": "",
+    "password": ""
+  },
+  "Network": {
+    "connectivity_check_enabled": true,
+    "connectivity_timeout": 5
+  }
+}

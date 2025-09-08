@@ -1,0 +1,60 @@
+# ZMQ客户端配置文件
+# 用于配置网络参数、话题设置和传输选项
+
+# 网络配置
+network:
+  # 本地Windows客户端配置
+  local:
+    ip: "10.10.19.252"  # 本地IP地址
+    send_port: 5556     # 本地发送端口
+  
+  # ROS1服务器配置
+  ros1_server:
+    ip: "10.10.12.233"  # ROS1服务器IP地址
+    receive_port: 5555  # 从服务器接收消息的端口
+
+# 话题配置
+topics:
+  # 订阅的话题列表
+  subscribe:
+    - "/server_time_now"
+    - "/move_base_node/cross_v2_response"
+  
+  # 发布的话题配置
+  publish:
+    test_topic:
+      name: "/test"
+      content: "test"
+      frequency: 1.0  # Hz
+
+# 传输配置
+transport:
+  # 是否优先使用Protobuf（如果可用）
+  prefer_protobuf: true
+  
+  # ZMQ配置
+  zmq:
+    # 接收超时时间（毫秒）
+    receive_timeout: 1000
+    # 连接建立等待时间（秒）
+    connection_wait: 2
+    # 错误重试间隔（秒）
+    retry_interval: 0.1
+
+# 日志配置
+logging:
+  # 是否显示时间戳
+  show_timestamp: true
+  # 时间戳格式
+  timestamp_format: "%Y-%m-%d %H:%M:%S.%f"
+  # 是否显示传输格式信息
+  show_transport_format: true
+  # 是否显示详细的连接信息
+  show_connection_details: true
+
+# 性能配置
+performance:
+  # 主循环休眠时间（秒）
+  main_loop_sleep: 1.0
+  # 发送消息间隔（秒）
+  send_interval: 1.0

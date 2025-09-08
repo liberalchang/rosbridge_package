@@ -1,0 +1,660 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+ROSLibPy客户端 - 配置化版本
+用于通过ROSBridge连接ROS系统，支持外部配置文件
+
+运行环境: Windows/Linux
+依赖: roslibpy, PyYAML
+配置文件: roslibpy_config.yaml
+"""
+
+import roslibpy
+import time
+import threading
+import socket
+import sys
+import yaml
+import os
+import argparse
+from pathlib import Path
+from datetime import datetime
+from logger import Logger, LogLevel
+
+class ROSBridgeClient:
+    def __init__(self, config_path='roslibpy_config.yaml'):
+        """初始化ROSBridge客户端
+        
+        Args:
+            config_path (str): 配置文件路径
+        """
+        self.config_path = config_path
+        self.config = self.load_config()
+        
+        # 从配置文件读取参数
+        self.host = self.config['rosbridge']['default']['host']
+        self.port = self.config['rosbridge']['default']['port']
+        self.connection_timeout = self.config['rosbridge']['connection']['timeout']
+        self.retry_interval = self.config['rosbridge']['connection']['retry_interval']
+        self.max_retries = self.config['rosbridge']['connection']['max_retries']
+        
+        # 网络检查配置
+        self.connectivity_check_enabled = self.config['network']['connectivity_check']['enabled']
+        self.connectivity_timeout = self.config['network']['connectivity_check']['timeout']
+        
+        # 日志配置
+        self.verbose = self.config['logging']['verbose']
+        self.show_timestamp = self.config['logging']['show_timestamp']
+        self.timestamp_format = self.config['logging']['timestamp_format']
+        self.show_connection_status = self.config['logging']['show_connection_status']
+        self.show_message_content = self.config['logging']['show_message_content']
+        self.max_message_length = self.config['logging']['max_message_length']
+        
+        # 初始化日志器
+        self.logger = Logger(
+            name="ROSLibPy",
+            max_message_length=self.max_message_length,
+            show_timestamp=self.show_timestamp,
+            timestamp_format=self.timestamp_format,
+            min_level=LogLevel.DEBUG if self.verbose else LogLevel.INFO
+        )
+        
+        # 性能配置
+        self.main_loop_sleep = self.config['performance']['main_loop_sleep']
+        self.publish_sleep = self.config['performance']['publish_sleep']
+        
+        # 话题配置
+        self.subscribe_topics = self.config['topics']['subscribe']
+        self.publish_config = self.config['topics']['publish']['test_topic']
+        
+        # 错误处理配置
+        self.auto_reconnect = self.config['error_handling']['auto_reconnect']
+        self.reconnect_interval = self.config['error_handling']['reconnect_interval']
+        self.max_reconnect_attempts = self.config['error_handling']['max_reconnect_attempts']
+        self.continue_on_error = self.config['error_handling']['continue_on_error']
+        
+        # ROS系统信息查询配置
+        self.ros_info_config = self.config.get('ros_info', {})
+        self.query_on_startup = self.ros_info_config.get('query_on_startup', True)
+        self.query_nodes = self.ros_info_config.get('query_nodes', True)
+        self.query_topics = self.ros_info_config.get('query_topics', True)
+        self.query_params = self.ros_info_config.get('query_params', True)
+        self.query_services = self.ros_info_config.get('query_services', True)
+        self.query_timeout = self.ros_info_config.get('query_timeout', 10)
+        self.show_details = self.ros_info_config.get('show_details', True)
+        
+        # 运行时变量
+        self.client = None
+        self.test_publisher = None
+        self.subscribers = {}
+        self.running = False
+        self.reconnect_count = 0
+    
+    def load_config(self):
+        """加载配置文件
+        
+        Returns:
+            dict: 配置字典
+        """
+        try:
+            config_file = Path(self.config_path)
+            if not config_file.exists():
+                # 在logger初始化前使用临时输出
+                print(f"配置文件未找到: {self.config_path}，使用默认配置")
+                return self.get_default_config()
+            
+            with open(config_file, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f)
+            
+            # 在logger初始化前使用临时输出
+            print(f"配置文件加载成功: {config_file.absolute()}")
+            return config
+            
+        except Exception as e:
+            # 在logger初始化前使用临时输出
+            print(f"配置文件加载失败: {e}，使用默认配置")
+            return self.get_default_config()
+    
+    def get_default_config(self):
+        """获取默认配置
+        
+        Returns:
+            dict: 默认配置字典
+        """
+        return {
+            'rosbridge': {
+                'default': {
+                    'host': '10.10.12.233',
+                    'port': 9091
+                },
+                'local': {
+                    'host': 'localhost',
+                    'port': 9090
+                },
+                'connection': {
+                    'timeout': 10,
+                    'retry_interval': 0.1,
+                    'max_retries': 3
+                }
+            },
+            'topics': {
+                'subscribe': {
+                    'server_time': {
+                        'name': '/server_time_now',
+                        'message_type': 'std_msgs/String',
+                        'callback_name': 'server_time_callback'
+                    },
+                    'move_base_request': {
+                        'name': '/move_base_node/cross_v2_request',
+                        'message_type': 'std_msgs/String',
+                        'callback_name': 'move_base_callback'
+                    }
+                },
+                'publish': {
+                    'test_topic': {
+                        'name': '/test',
+                        'message_type': 'std_msgs/String',
+                        'content': 'test',
+                        'frequency': 1.0
+                    }
+                }
+            },
+            'network': {
+                'connectivity_check': {
+                    'enabled': True,
+                    'timeout': 5
+                }
+            },
+            'logging': {
+                'verbose': True,
+                'show_timestamp': True,
+                'timestamp_format': '%Y-%m-%d %H:%M:%S',
+                'show_connection_status': True,
+                'show_message_content': True,
+                'max_message_length': 200
+            },
+            'performance': {
+                'main_loop_sleep': 0.1,
+                'publish_sleep': 1.0
+            },
+            'error_handling': {
+                'auto_reconnect': True,
+                'reconnect_interval': 5,
+                'max_reconnect_attempts': -1,
+                'continue_on_error': True
+            },
+            'ros_info': {
+                'query_on_startup': True,
+                'query_nodes': True,
+                'query_topics': True,
+                'query_params': True,
+                'query_services': True,
+                'query_timeout': 10,
+                'show_details': True
+            }
+        }
+    
+    def log_message(self, message, level='INFO'):
+        """
+        记录日志消息
+        
+        Args:
+            message (str): 日志消息
+            level (str): 日志级别
+        """
+        if not self.verbose:
+            return
+        
+        # 使用新的日志器
+        level_map = {
+            'DEBUG': LogLevel.DEBUG,
+            'INFO': LogLevel.INFO,
+            'WARNING': LogLevel.WARNING,
+            'ERROR': LogLevel.ERROR,
+            'CRITICAL': LogLevel.CRITICAL
+        }
+        log_level = level_map.get(level.upper(), LogLevel.INFO)
+        self.logger.log(log_level, message)
+        
+    def check_network_connectivity(self):
+        """检查网络连通性"""
+        if not self.connectivity_check_enabled:
+            return True
+            
+        try:
+            self.log_message(f"检查网络连通性: {self.host}:{self.port}")
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(self.connectivity_timeout)
+            result = sock.connect_ex((self.host, self.port))
+            sock.close()
+            
+            if result == 0:
+                self.log_message(f"网络连接正常: {self.host}:{self.port}")
+                return True
+            else:
+                self.log_message(f"无法连接到 {self.host}:{self.port} (错误代码: {result})")
+                return False
+        except Exception as e:
+            self.log_message(f"网络连接检查失败: {e}")
+            return False
+        
+    def connect(self):
+        """连接到ROSBridge服务器"""
+        try:
+            self.log_message(f"正在尝试连接到ROSBridge服务器: {self.host}:{self.port}")
+            self.client = roslibpy.Ros(host=self.host, port=self.port)
+            
+            # 添加连接事件监听
+            if self.show_connection_status:
+                self.client.on('connection', lambda: self.log_message("WebSocket连接已建立"))
+                self.client.on('close', lambda: self.log_message("WebSocket连接已关闭"))
+                self.client.on('error', lambda error: self.log_message(f"WebSocket错误: {error}"))
+            
+            self.client.run()
+            
+            # 等待连接建立
+            start_time = time.time()
+            while not self.client.is_connected and (time.time() - start_time) < self.connection_timeout:
+                time.sleep(self.retry_interval)
+            
+            if self.client.is_connected:
+                self.log_message(f"成功连接到ROSBridge服务器: {self.host}:{self.port}")
+                self.reconnect_count = 0  # 重置重连计数
+                return True
+            else:
+                self.log_message(f"连接超时: 无法在{self.connection_timeout}秒内连接到服务器")
+                return False
+                
+        except Exception as e:
+            self.log_message(f"连接失败: {e}")
+            self.log_message(f"请确保ROSBridge服务器正在运行在 {self.host}:{self.port}")
+            return False
+    
+    def setup_subscribers(self):
+        """设置订阅者"""
+        for topic_key, topic_config in self.subscribe_topics.items():
+            topic_name = topic_config['name']
+            message_type = topic_config['message_type']
+            callback_name = topic_config['callback_name']
+            
+            # 创建订阅者
+            subscriber = roslibpy.Topic(
+                self.client,
+                topic_name,
+                message_type
+            )
+            
+            # 获取回调函数
+            callback_func = getattr(self, callback_name, self.default_callback)
+            subscriber.subscribe(lambda msg, name=topic_name: callback_func(msg, name))
+            
+            # 保存订阅者引用
+            self.subscribers[topic_key] = subscriber
+            
+            self.log_message(f"已订阅话题: {topic_name} ({message_type})")
+    
+    def default_callback(self, message, topic_name):
+        """默认回调函数
+        
+        Args:
+            message: 接收到的消息
+            topic_name (str): 话题名称
+        """
+        if self.show_message_content:
+            msg_str = str(message)
+            if len(msg_str) > self.max_message_length:
+                msg_str = msg_str[:self.max_message_length] + "..."
+            self.log_message(f"[{topic_name}] 收到消息: {msg_str}")
+        else:
+            self.log_message(f"[{topic_name}] 收到消息")
+    
+    def setup_publisher(self):
+        """设置发布者"""
+        topic_name = self.publish_config['name']
+        message_type = self.publish_config['message_type']
+        
+        self.test_publisher = roslibpy.Topic(
+            self.client,
+            topic_name,
+            message_type
+        )
+        self.log_message(f"已创建发布者: {topic_name} ({message_type})")
+    
+    def server_time_callback(self, message, topic_name=None):
+        """处理 /server_time_now 话题的回调函数"""
+        if self.show_message_content:
+            msg_str = str(message)
+            if len(msg_str) > self.max_message_length:
+                msg_str = msg_str[:self.max_message_length] + "..."
+            self.log_message(f"{topic_name} {msg_str}")
+        else:
+            self.log_message(f"{topic_name} 收到消息")
+    
+    def move_base_callback(self, message, topic_name=None):
+        """处理 /move_base_node/cross_v2_request 话题的回调函数"""
+        if self.show_message_content:
+            msg_str = str(message)
+            if len(msg_str) > self.max_message_length:
+                msg_str = msg_str[:self.max_message_length] + "..."
+            self.log_message(f"{topic_name} {msg_str}")
+        else:
+            self.log_message(f"{topic_name} 收到消息")
+    
+    def publish_test_message(self):
+        """发布测试消息"""
+        content = self.publish_config['content']
+        frequency = self.publish_config['frequency']
+        topic_name = self.publish_config['name']
+        
+        sleep_time = 1.0 / frequency if frequency > 0 else self.publish_sleep
+        
+        while self.running:
+            if self.test_publisher and self.client.is_connected:
+                message = roslibpy.Message({'data': content})
+                self.test_publisher.publish(message)
+                self.log_message(f"[{topic_name}] 发布消息: {content}")
+            time.sleep(sleep_time)
+    
+    def start(self):
+        """启动客户端"""
+        # 先检查网络连通性
+        if not self.check_network_connectivity():
+            self.log_message("\n网络连接失败，请检查:")
+            self.log_message(f"1. ROSBridge服务器是否在 {self.host}:{self.port} 运行")
+            self.log_message("2. 网络连接是否正常")
+            self.log_message("3. 防火墙设置是否阻止连接")
+            self.log_message("\n如果要测试本地功能，请先启动本地ROSBridge服务器")
+            return
+        
+        if not self.connect():
+            if self.auto_reconnect and self.reconnect_count < self.max_reconnect_attempts:
+                self.log_message(f"将在{self.reconnect_interval}秒后尝试重连...")
+                time.sleep(self.reconnect_interval)
+                self.reconnect_count += 1
+                return self.start()  # 递归重连
+            return
+        
+        # 等待连接建立
+        time.sleep(1)
+        
+        # 查询ROS系统信息
+        self.query_ros_system_info()
+        
+        # 设置订阅者和发布者
+        self.setup_subscribers()
+        self.setup_publisher()
+        
+        # 启动发布线程
+        self.running = True
+        publish_thread = threading.Thread(target=self.publish_test_message)
+        publish_thread.daemon = True
+        publish_thread.start()
+        
+        self.log_message("ROSBridge客户端已启动，按Ctrl+C退出...")
+        
+        try:
+            # 保持主线程运行
+            while True:
+                time.sleep(self.main_loop_sleep)
+        except KeyboardInterrupt:
+            self.log_message("\n正在关闭客户端...")
+            self.stop()
+    
+    def get_ros_nodes(self):
+        """获取ROS节点列表"""
+        try:
+            if not self.client or not self.client.is_connected:
+                self.log_message("客户端未连接，无法获取节点列表")
+                return []
+            
+            self.log_message("正在获取ROS节点列表...")
+            
+            # 创建服务客户端来获取节点列表
+            get_nodes_service = roslibpy.Service(self.client, '/rosapi/nodes', 'rosapi/Nodes')
+            
+            # 调用服务
+            request = roslibpy.ServiceRequest()
+            
+            # 使用同步调用
+            result = get_nodes_service.call(request, timeout=self.query_timeout)
+            
+            if result and 'nodes' in result:
+                nodes = result['nodes']
+                self.log_message(f"找到 {len(nodes)} 个ROS节点:")
+                if self.show_details:
+                    for i, node in enumerate(nodes, 1):
+                        self.log_message(f"  {i:2d}. {node}")
+                return nodes
+            else:
+                self.log_message("未能获取到节点列表")
+                return []
+                
+        except Exception as e:
+            self.log_message(f"获取节点列表失败: {e}")
+            return []
+    
+    def get_ros_topics(self):
+        """获取ROS话题列表"""
+        try:
+            if not self.client or not self.client.is_connected:
+                self.log_message("客户端未连接，无法获取话题列表")
+                return []
+            
+            self.log_message("正在获取ROS话题列表...")
+            
+            # 创建服务客户端来获取话题列表
+            get_topics_service = roslibpy.Service(self.client, '/rosapi/topics', 'rosapi/Topics')
+            
+            # 调用服务
+            request = roslibpy.ServiceRequest()
+            
+            # 使用同步调用
+            result = get_topics_service.call(request, timeout=self.query_timeout)
+            
+            if result and 'topics' in result:
+                topics = result['topics']
+                self.log_message(f"找到 {len(topics)} 个ROS话题:")
+                if self.show_details:
+                    for i, topic in enumerate(topics, 1):
+                        self.log_message(f"  {i:2d}. {topic}")
+                return topics
+            else:
+                self.log_message("未能获取到话题列表")
+                return []
+                
+        except Exception as e:
+            self.log_message(f"获取话题列表失败: {e}")
+            return []
+    
+    def get_ros_params(self):
+        """获取ROS参数列表"""
+        try:
+            if not self.client or not self.client.is_connected:
+                self.log_message("客户端未连接，无法获取参数列表")
+                return []
+            
+            self.log_message("正在获取ROS参数列表...")
+            
+            # 创建服务客户端来获取参数列表
+            get_params_service = roslibpy.Service(self.client, '/rosapi/params', 'rosapi/Params')
+            
+            # 调用服务
+            request = roslibpy.ServiceRequest()
+            
+            # 使用同步调用
+            result = get_params_service.call(request, timeout=self.query_timeout)
+            
+            if result and 'params' in result:
+                params = result['params']
+                self.log_message(f"找到 {len(params)} 个ROS参数:")
+                if self.show_details:
+                    for i, param in enumerate(params, 1):
+                        self.log_message(f"  {i:2d}. {param}")
+                return params
+            else:
+                self.log_message("未能获取到参数列表")
+                return []
+                
+        except Exception as e:
+            self.log_message(f"获取参数列表失败: {e}")
+            return []
+    
+    def get_ros_services(self):
+        """获取ROS服务列表"""
+        try:
+            if not self.client or not self.client.is_connected:
+                self.log_message("客户端未连接，无法获取服务列表")
+                return []
+            
+            self.log_message("正在获取ROS服务列表...")
+            
+            # 创建服务客户端来获取服务列表
+            get_services_service = roslibpy.Service(self.client, '/rosapi/services', 'rosapi/Services')
+            
+            # 调用服务
+            request = roslibpy.ServiceRequest()
+            
+            # 使用同步调用
+            result = get_services_service.call(request, timeout=self.query_timeout)
+            
+            if result and 'services' in result:
+                services = result['services']
+                self.log_message(f"找到 {len(services)} 个ROS服务:")
+                if self.show_details:
+                    for i, service in enumerate(services, 1):
+                        self.log_message(f"  {i:2d}. {service}")
+                return services
+            else:
+                self.log_message("未能获取到服务列表")
+                return []
+                
+        except Exception as e:
+            self.log_message(f"获取服务列表失败: {e}")
+            return []
+    
+    def query_ros_system_info(self):
+        """查询ROS系统信息"""
+        if not self.query_on_startup:
+            return
+        
+        self.log_message("\n" + "=" * 50)
+        self.log_message("正在查询ROS系统信息...")
+        self.log_message("=" * 50)
+        
+        # 查询节点列表
+        if self.query_nodes:
+            nodes = self.get_ros_nodes()
+            
+        # 查询话题列表
+        if self.query_topics:
+            topics = self.get_ros_topics()
+            
+        # 查询参数列表
+        if self.query_params:
+            params = self.get_ros_params()
+            
+        # 查询服务列表
+        if self.query_services:
+            services = self.get_ros_services()
+        
+        self.log_message("=" * 50)
+        self.log_message("ROS系统信息查询完成")
+        self.log_message("=" * 50 + "\n")
+    
+    def stop(self):
+        """停止客户端"""
+        self.running = False
+        
+        # 取消所有订阅
+        for topic_key, subscriber in self.subscribers.items():
+            try:
+                subscriber.unsubscribe()
+                self.log_message(f"已取消订阅: {topic_key}")
+            except Exception as e:
+                self.log_message(f"取消订阅失败 {topic_key}: {e}")
+        
+        # 清空订阅者字典
+        self.subscribers.clear()
+        
+        # 关闭连接
+        if self.client:
+            try:
+                self.client.terminate()
+                self.log_message("ROSBridge连接已关闭")
+            except Exception as e:
+                self.log_message(f"关闭连接时出错: {e}")
+        
+        self.log_message("客户端已关闭")
+
+def main():
+    """主函数"""
+    # 解析命令行参数
+    parser = argparse.ArgumentParser(
+        description='ROSLibPy客户端 - 配置化版本',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""示例:
+  python roslibpy_client.py                           # 使用默认配置文件
+  python roslibpy_client.py --config my_config.yaml  # 指定配置文件
+  python roslibpy_client.py --local                  # 使用本地模式
+        """
+    )
+    
+    parser.add_argument(
+        '--config', '-c',
+        default='roslibpy_config.yaml',
+        help='配置文件路径 (默认: roslibpy_config.yaml)'
+    )
+    
+    parser.add_argument(
+        '--local',
+        action='store_true',
+        help='使用本地模式 (localhost:9090)'
+    )
+    
+    args = parser.parse_args()
+    
+    # 创建临时日志器用于main函数输出
+    from logger import create_logger, LogLevel
+    main_logger = create_logger("Main", min_level=LogLevel.INFO)
+    
+    main_logger.info("=== ROSLibPy客户端用于ROS消息通信 (配置化版本) ===")
+    main_logger.info(f"配置文件: {args.config}")
+    main_logger.info("=" * 60)
+    
+    try:
+        # 创建客户端实例
+        client = ROSBridgeClient(config_path=args.config)
+        
+        # 如果指定了本地模式，覆盖配置
+        if args.local:
+            client.host = client.config['rosbridge']['local']['host']
+            client.port = client.config['rosbridge']['local']['port']
+            main_logger.info(f"使用本地模式: {client.host}:{client.port}")
+        
+        # 显示当前配置
+        main_logger.info(f"ROSBridge客户端已初始化")
+        main_logger.info(f"连接目标: {client.host}:{client.port}")
+        
+        # 显示话题配置
+        subscribe_topics = [config['name'] for config in client.subscribe_topics.values()]
+        publish_topic = client.publish_config['name']
+        publish_freq = client.publish_config['frequency']
+        
+        main_logger.info(f"订阅话题: {', '.join(subscribe_topics)}")
+        main_logger.info(f"发布话题: {publish_topic} ({publish_freq}Hz)")
+        main_logger.info(f"日志详细程度: {'详细' if client.verbose else '简洁'}")
+        main_logger.info(f"自动重连: {'启用' if client.auto_reconnect else '禁用'}")
+        main_logger.info("=" * 60)
+        
+        # 启动客户端
+        client.start()
+        
+    except KeyboardInterrupt:
+        main_logger.info("\n程序被用户中断")
+    except Exception as e:
+        main_logger.error(f"程序运行出错: {e}")
+        import traceback
+        traceback.print_exc()
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,117 @@
+# ROSLibPy客户端配置文件
+# 用于配置ROSBridge连接参数、话题设置和传输选项
+
+# ROSBridge服务器配置
+rosbridge:
+  # 默认服务器配置
+  default:
+    host: "10.10.17.235"  # ROSBridge服务器IP地址
+    port: 9091            # ROSBridge服务器端口
+  
+  # 本地服务器配置
+  local:
+    host: "localhost"     # 本地服务器地址
+    port: 9090            # 本地服务器端口
+  
+  # 连接配置
+  connection:
+    timeout: 10           # 连接超时时间（秒）
+    retry_interval: 0.1   # 重试间隔（秒）
+    max_retries: 3        # 最大重试次数
+
+## 话题配置
+#topics:
+#  # 订阅的话题列表
+#  subscribe:
+#    server_time:
+#      name: "/server_time_now"
+#      message_type: "std_msgs/String"
+#      callback_name: "server_time_callback"
+#
+#    move_base_request:
+#      name: "/move_base_node/cross_v2_request"
+#      message_type: "std_msgs/String"
+#      callback_name: "move_base_callback"
+  
+  # 发布的话题配置
+  publish:
+    test_topic:
+      name: "/test"
+      message_type: "std_msgs/String"
+      content: "test"
+      frequency: 1.0        # 发布频率（Hz）
+
+# 网络配置
+network:
+  # 网络连通性检查
+  connectivity_check:
+    enabled: true           # 是否启用连通性检查
+    timeout: 5              # 检查超时时间（秒）
+  
+  # WebSocket配置
+  websocket:
+    ping_interval: 30       # WebSocket ping间隔（秒）
+    ping_timeout: 10        # WebSocket ping超时（秒）
+
+# 日志配置
+logging:
+  # 是否显示详细日志
+  verbose: true
+  # 是否显示时间戳
+  show_timestamp: true
+  # 时间戳格式
+  timestamp_format: "%Y-%m-%d %H:%M:%S"
+  # 是否显示连接状态
+  show_connection_status: true
+  # 是否显示消息内容
+  show_message_content: true
+  # 消息内容最大长度（超过则截断）
+  max_message_length: 200
+
+# 性能配置
+performance:
+  # 主循环休眠时间（秒）
+  main_loop_sleep: 0.1
+  # 发布线程休眠时间（秒）
+  publish_sleep: 1.0
+  # 消息队列大小
+  message_queue_size: 100
+
+# 错误处理配置
+error_handling:
+  # 是否自动重连
+  auto_reconnect: true
+  # 重连间隔（秒）
+  reconnect_interval: 5
+  # 最大重连次数（-1表示无限重连）
+  max_reconnect_attempts: -1
+  # 是否在错误时继续运行
+  continue_on_error: true
+
+# ROS系统信息查询配置
+ros_info:
+  # 是否在启动时查询ROS系统信息
+  query_on_startup: true
+  # 查询节点列表
+  query_nodes: true
+  # 查询话题列表
+  query_topics: true
+  # 查询参数列表
+  query_params: true
+  # 查询服务列表
+  query_services: true
+  # 查询超时时间（秒）
+  query_timeout: 10
+  # 是否显示详细信息
+  show_details: true
+
+# 调试配置
+debug:
+  # 是否启用调试模式
+  enabled: false
+  # 是否保存消息日志
+  save_message_log: false
+  # 日志文件路径
+  log_file_path: "./roslibpy_client.log"
+  # 是否显示原始WebSocket消息
+  show_raw_messages: false

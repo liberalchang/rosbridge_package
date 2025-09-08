@@ -1,0 +1,44 @@
+# ROSBridge客户端配置文件示例 (YAML格式)
+# 支持注释，便于理解和维护
+
+ROSBridge:
+  # 连接配置
+  host: localhost                    # ROSBridge服务器地址
+  port: 9091                        # ROSBridge服务器端口
+  protocol: ws                      # 协议类型 (ws/wss)
+  connection_timeout: 10            # 连接超时时间(秒)
+  retry_interval: 0.1               # 重试间隔(秒)
+  max_retries: 3                    # 最大重试次数
+  
+  # WebSocket配置
+  ping_interval: 30                 # ping间隔(秒)
+  ping_timeout: 10                  # ping超时(秒)
+  close_timeout: 10                 # 关闭超时(秒)
+  max_size: 1048576                 # 最大消息大小(字节)
+  
+  # 重连配置
+  auto_reconnect: true              # 是否自动重连
+  reconnect_interval: 5             # 重连间隔(秒)
+  max_reconnect_attempts: -1        # 最大重连次数(-1表示无限制)
+  
+  # 日志配置
+  verbose: true                     # 详细日志
+  show_connection_status: true      # 显示连接状态
+  show_message_content: true        # 显示消息内容
+  max_message_length: 200           # 最大消息显示长度
+  
+  # 性能配置
+  main_loop_sleep: 0.1              # 主循环休眠时间(秒)
+  publish_sleep: 1.0                # 发布休眠时间(秒)
+  message_processing_sleep: 0.01    # 消息处理休眠时间(秒)
+  
+  # 消息配置
+  message_format: json              # 消息格式 (json/string/bytes)
+  encoding: utf-8                   # 编码格式
+  compression_enabled: false        # 是否启用压缩
+  compression_level: 6              # 压缩级别(1-9)
+
+Network:
+  # 网络检查配置
+  connectivity_check_enabled: true  # 是否启用连通性检查
+  connectivity_timeout: 5           # 连通性检查超时(秒)

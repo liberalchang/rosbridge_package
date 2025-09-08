@@ -1,0 +1,60 @@
+# ZMQ客户端配置文件示例 (YAML格式)
+# 支持注释，便于理解和维护
+
+ZMQ:
+  # 端口配置
+  pub_port: 5555                    # 发布端口
+  sub_port: 5556                    # 订阅端口
+  req_port: 5557                    # 请求端口
+  rep_port: 5558                    # 响应端口
+  host: localhost                   # ZMQ服务器地址
+  
+  # 连接配置
+  connection_timeout: 10            # 连接超时时间(秒)
+  retry_interval: 0.1               # 重试间隔(秒)
+  max_retries: 3                    # 最大重试次数
+  socket_timeout: 5000              # Socket超时时间(毫秒)
+  linger_time: 1000                 # Socket关闭等待时间(毫秒)
+  high_water_mark: 1000             # 高水位标记(消息队列大小)
+  
+  # 重连配置
+  auto_reconnect: true              # 是否自动重连
+  reconnect_interval: 5             # 重连间隔(秒)
+  max_reconnect_attempts: -1        # 最大重连次数(-1表示无限制)
+  
+  # 日志配置
+  verbose: true                     # 详细日志
+  show_connection_status: true      # 显示连接状态
+  show_message_content: true        # 显示消息内容
+  max_message_length: 200           # 最大消息显示长度
+  
+  # 性能配置
+  main_loop_sleep: 0.1              # 主循环休眠时间(秒)
+  publish_sleep: 1.0                # 发布休眠时间(秒)
+  message_processing_sleep: 0.01    # 消息处理休眠时间(秒)
+  
+  # 消息配置
+  message_format: json              # 消息格式 (json/string/bytes)
+  encoding: utf-8                   # 编码格式
+  compression_enabled: false        # 是否启用压缩
+  compression_level: 6              # 压缩级别(1-9)
+  
+  # 心跳配置
+  heartbeat_enabled: true           # 是否启用心跳
+  heartbeat_interval: 30            # 心跳间隔(秒)
+  heartbeat_timeout: 10             # 心跳超时(秒)
+  
+  # 队列和线程配置
+  queue_size: 100                   # 消息队列大小
+  thread_pool_size: 4               # 线程池大小
+  
+  # 安全配置
+  security_enabled: false           # 是否启用安全认证
+  security_mechanism: PLAIN         # 安全机制 (PLAIN/CURVE/GSSAPI)
+  username: ""                      # 用户名
+  password: ""                      # 密码
+
+Network:
+  # 网络检查配置
+  connectivity_check_enabled: true  # 是否启用连通性检查
+  connectivity_timeout: 5           # 连通性检查超时(秒)
